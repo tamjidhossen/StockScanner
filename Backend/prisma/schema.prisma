@@ -1,0 +1,21 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Stock {
+  id          String   @id @default(uuid())
+  symbol      String   @unique
+  name        String
+  sector      String?
+  lastPrice   Float?
+  isHalal     Boolean  @default(false)
+  halalStatus String   @default("UNSCREENED") // HALAL, NOT_HALAL, DOUBTFUL, UNSCREENED
+  reasons     String?  // Screening reasons or notes
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}

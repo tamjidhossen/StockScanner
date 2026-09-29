@@ -1,0 +1,19 @@
+{
+  "name": "stockscanner",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "Frontend",
+    "Backend"
+  ],
+  "scripts": {
+    "dev": "concurrently -n \"frontend,backend\" -c \"cyan,green\" \"npm run dev:frontend\" \"npm run dev:backend\"",
+    "dev:frontend": "npm run dev --workspace=Frontend",
+    "dev:backend": "npm run dev --workspace=Backend",
+    "build:frontend": "npm run build --workspace=Frontend",
+    "start:backend": "npm run start --workspace=Backend"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.5"
+  }
+}
