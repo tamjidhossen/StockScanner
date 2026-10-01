@@ -31,6 +31,14 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# Uploaded PDFs and rendered page image assets
+Backend/uploads/reports/*
+!Backend/uploads/reports/.gitkeep
+Backend/uploads/rendered/*
+!Backend/uploads/rendered/.gitkeep
+uploads/
+*.pdf
+
 # Editor / OS
 .vscode/
 .idea/

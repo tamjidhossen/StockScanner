@@ -7,15 +7,189 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model Stock {
-  id          String   @id @default(uuid())
-  symbol      String   @unique
-  name        String
-  sector      String?
-  lastPrice   Float?
-  isHalal     Boolean  @default(false)
-  halalStatus String   @default("UNSCREENED") // HALAL, NOT_HALAL, DOUBTFUL, UNSCREENED
-  reasons     String?  // Screening reasons or notes
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+model Company {
+  id                 String            @id @default(uuid())
+  dseSymbol          String            @unique // e.g. "GP", "SQURPHARMA"
+  name               String            // e.g. "Grameenphone Ltd."
+  sector             String            // e.g. "Telecom", "PharmaChem"
+  fiscalYearEnd      String            @default("December") // "June" or "December"
+  listingYear        Int?
+  authorizedCapMn    Float?
+  paidUpCapMn        Float?
+  faceValue          Float?            @default(10.0)
+  totalShares        BigInt?           // Total outstanding securities from DSE
+  operationalStatus  String            @default("Active")
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+
+  periods            FinancialPeriod[]
+  documents          Document[]
+  marketData         MarketData[]
+  screenings         ScreeningResult[]
+  normalizedFacts    NormalizedFact[]
+}
+
+model FinancialPeriod {
+  id               String            @id @default(uuid())
+  companyId        String
+  periodType       String            // "ANNUAL", "Q1", "Q2", "Q3", "H1"
+  periodMonths     Int               @default(12) // 3 for Q1/Q2/Q3, 6 for H1, 12 for ANNUAL
+  isAudited        Boolean           @default(false)
+  periodStart      DateTime
+  periodEnd        DateTime          // Balance sheet date (e.g. 2024-06-30)
+  fiscalYear       String            // e.g. "2024-2025"
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  company          Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  documents        Document[]
+  facts            NormalizedFact[]
+  screenings       ScreeningResult[]
+
+  @@unique([companyId, periodType, periodEnd])
+}
+
+model Document {
+  id                String            @id @default(uuid())
+  companyId         String
+  financialPeriodId String?
+  reportType        String            // "ANNUAL", "QUARTERLY"
+  originalFilename  String
+  storedFilePath    String            // uploads/reports/{symbol}/{year}/{hash}.pdf
+  fileHash          String            @unique // SHA-256
+  totalPages        Int               @default(0)
+  status            String            @default("UPLOADED") // UPLOADED, QUEUED, PROCESSING, EXTRACTED, FAILED
+  failureReason     String?
+  uploadedAt        DateTime          @default(now())
+  processedAt       DateTime?
+
+  company           Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  financialPeriod   FinancialPeriod?  @relation(fields: [financialPeriodId], references: [id], onDelete: SetNull)
+  pages             DocumentPage[]
+  extractionJobs    ExtractionJob[]
+  rawFacts          RawFact[]
+}
+
+model DocumentPage {
+  id               String            @id @default(uuid())
+  documentId       String
+  pageNumber       Int               // 1-indexed
+  pageType         String            @default("TEXT") // "TEXT", "SCANNED", "MIXED"
+  contentType      String            @default("OTHER") // "BALANCE_SHEET", "INCOME_STATEMENT", "CASH_FLOW", "NOTES", "OTHER"
+  isRotated        Boolean           @default(false)
+  rotationAngle    Int               @default(0) // 0, 90, 180, 270
+  imagePath        String?           // Rendered PNG path in scratch/thumbnails
+  hasExtractedText Boolean           @default(false)
+  rawTextPreview   String?           // First 250 chars of extracted text
+
+  document         Document          @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, pageNumber])
+}
+
+model ExtractionJob {
+  id               String            @id @default(uuid())
+  documentId       String
+  status           String            @default("PENDING") // PENDING, PROCESSING, COMPLETED, FAILED
+  attempts         Int               @default(0)
+  pagesProcessed   Int               @default(0)
+  totalPages       Int               @default(0)
+  factsExtracted   Int               @default(0)
+  failureReason    String?
+  startedAt        DateTime?
+  completedAt      DateTime?
+  createdAt        DateTime          @default(now())
+
+  document         Document          @relation(fields: [documentId], references: [id], onDelete: Cascade)
+}
+
+model RawFact {
+  id               String            @id @default(uuid())
+  documentId       String
+  pageNumber       Int
+  statementType    String            // "BALANCE_SHEET", "INCOME_STATEMENT", "CASH_FLOW", "NOTES"
+  rawLabel         String            // Exact label as printed
+  rawValue         String            // Exact raw text (e.g. "(1,234.50)" or "১২৩৪")
+  currencyRaw      String?           // "BDT", "Taka"
+  unitScaleRaw     String?           // "in millions", "in thousands"
+  columnContext    String?           // e.g. "30 June 2024", "Current Period"
+  boundingBox      String?           // JSON: {x, y, w, h}
+  extractionMethod String            // "VISION_JSON_SCHEMA", "TEXT_PARSE"
+  confidenceScore  Float             @default(1.0) // 0.0 to 1.0
+  extractedAt      DateTime          @default(now())
+
+  document         Document          @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  normalizedFact   NormalizedFact?
+}
+
+model NormalizedFact {
+  id                 String            @id @default(uuid())
+  rawFactId          String            @unique
+  companyId          String
+  financialPeriodId  String
+  conceptCode        String            // e.g. "SHORT_TERM_LOANS_ON_INTEREST", "INTEREST_INCOME"
+  normalizedValue    Float             // Amount in base BDT
+  currency           String            @default("BDT")
+  unitScale          Int               @default(1)
+  statementType      String
+  pageNumber         Int
+  confidenceScore    Float             @default(1.0)
+  mappingReason      String
+  isManuallyVerified Boolean           @default(false)
+  isFlaggedForReview Boolean           @default(false)
+  flagReason         String?
+  normalizedAt       DateTime          @default(now())
+
+  rawFact            RawFact           @relation(fields: [rawFactId], references: [id], onDelete: Cascade)
+  company            Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  financialPeriod    FinancialPeriod   @relation(fields: [financialPeriodId], references: [id], onDelete: Cascade)
+}
+
+model MarketData {
+  id                String            @id @default(uuid())
+  companyId         String
+  priceDate         DateTime
+  closingPrice      Float             // BDT per share
+  sharesOutstanding BigInt
+  marketCap         Float             // closingPrice * sharesOutstanding
+  marketCap12mAvg   Float?            // 12-month average market cap
+  source            String            @default("DSE_LIVE") // "DSE_LIVE", "DSE_SCRAPED", "MANUAL"
+  recordedAt        DateTime          @default(now())
+
+  company           Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+}
+
+model ScreeningResult {
+  id                      String                 @id @default(uuid())
+  companyId               String
+  financialPeriodId       String
+  screeningDate           DateTime               @default(now())
+  overallStatus           String                 // "COMPLIANT", "NON_COMPLIANT", "INSUFFICIENT_DATA"
+  purificationPerShare    Float                  // Period purification
+  purificationTtmPerShare Float?                 // Annualized TTM purification
+  methodologyNotes        String                 // Full disclosure notes
+  calculatedAt            DateTime               @default(now())
+
+  company                 Company                @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  financialPeriod         FinancialPeriod        @relation(fields: [financialPeriodId], references: [id], onDelete: Cascade)
+  ratioDetails            ScreeningRatioDetail[]
+}
+
+model ScreeningRatioDetail {
+  id                 String            @id @default(uuid())
+  screeningResultId  String
+  aaoifiRule         String            // "3/4/2", "3/4/3", "3/4/4"
+  viewType           String            // "STRICT_AAOIFI", "CONSERVATIVE"
+  marketCapType      String            // "PERIOD_DATE", "SCREENING_DATE", "AVERAGE_12M"
+  numeratorValue     Float
+  numeratorBreakdown String            // JSON string of components
+  denominatorValue   Float
+  denominatorSource  String            // "DSE_LIVE", "PERIOD_CLOSE", "12M_AVG"
+  ratioValue         Float
+  ratioPercent       Float
+  threshold          Float             // 30.0 or 5.0
+  passes             Boolean           // ratioPercent <= threshold
+  sourceFactIds      String            // JSON array of NormalizedFact IDs
+
+  screeningResult    ScreeningResult   @relation(fields: [screeningResultId], references: [id], onDelete: Cascade)
 }
