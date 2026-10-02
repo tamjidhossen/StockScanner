@@ -1,4 +1,5 @@
 import prisma from '../lib/prisma.js';
+import { deleteCompanyStorageFiles } from '../services/storage.service.js';
 
 /**
  * Helper to safely serialize BigInts to string in JSON responses
@@ -148,3 +149,126 @@ export async function createCompany(req, res, next) {
     next(error);
   }
 }
+
+export async function deleteCompany(req, res, next) {
+  try {
+    const { id } = req.params;
+
+    const company = await prisma.company.findFirst({
+      where: {
+        OR: [
+          { id },
+          { dseSymbol: id.toUpperCase() },
+        ],
+      },
+      include: {
+        documents: true,
+      },
+    });
+
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: `Company "${id}" not found`,
+      });
+    }
+
+    // 1. Clean up physical files from disk
+    deleteCompanyStorageFiles(company.dseSymbol, company.documents);
+
+    // 2. Delete company (Prisma schema cascades all related records)
+    await prisma.company.delete({
+      where: { id: company.id },
+    });
+
+    res.json({
+      success: true,
+      message: `Company "${company.name} (${company.dseSymbol})" and all associated reports, facts, screenings, and files have been permanently deleted`,
+      data: {
+        id: company.id,
+        dseSymbol: company.dseSymbol,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function purgeCompanyData(req, res, next) {
+  try {
+    const { id } = req.params;
+
+    const company = await prisma.company.findFirst({
+      where: {
+        OR: [
+          { id },
+          { dseSymbol: id.toUpperCase() },
+        ],
+      },
+      include: {
+        documents: true,
+      },
+    });
+
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: `Company "${id}" not found`,
+      });
+    }
+
+    // 1. Clean up physical files from disk
+    deleteCompanyStorageFiles(company.dseSymbol, company.documents);
+
+    // 2. Cascade delete all company child data while retaining the Company entity
+    await prisma.$transaction([
+      prisma.screeningRatioDetail.deleteMany({
+        where: {
+          screeningResult: { companyId: company.id },
+        },
+      }),
+      prisma.screeningResult.deleteMany({
+        where: { companyId: company.id },
+      }),
+      prisma.normalizedFact.deleteMany({
+        where: { companyId: company.id },
+      }),
+      prisma.rawFact.deleteMany({
+        where: {
+          document: { companyId: company.id },
+        },
+      }),
+      prisma.documentPage.deleteMany({
+        where: {
+          document: { companyId: company.id },
+        },
+      }),
+      prisma.extractionJob.deleteMany({
+        where: {
+          document: { companyId: company.id },
+        },
+      }),
+      prisma.document.deleteMany({
+        where: { companyId: company.id },
+      }),
+      prisma.financialPeriod.deleteMany({
+        where: { companyId: company.id },
+      }),
+      prisma.marketData.deleteMany({
+        where: { companyId: company.id },
+      }),
+    ]);
+
+    res.json({
+      success: true,
+      message: `All reports, facts, screenings, and market data for "${company.dseSymbol}" have been purged. Company reset to initial state.`,
+      data: {
+        id: company.id,
+        dseSymbol: company.dseSymbol,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+

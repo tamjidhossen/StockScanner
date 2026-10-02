@@ -104,3 +104,58 @@ export async function storePdfDocument({
 
   return document;
 }
+
+const RENDERED_ROOT = path.resolve(process.cwd(), 'uploads', 'rendered');
+
+/**
+ * Deletes physical storage files (PDF and rendered thumbnail images) for a document
+ *
+ * @param {string} documentId
+ * @param {string} storedFilePath
+ */
+export function deleteDocumentStorageFiles(documentId, storedFilePath) {
+  if (storedFilePath && fs.existsSync(storedFilePath)) {
+    try {
+      fs.unlinkSync(storedFilePath);
+    } catch (err) {
+      console.warn(`[Storage] Failed to unlink stored PDF (${storedFilePath}): ${err.message}`);
+    }
+  }
+
+  if (documentId) {
+    const docRenderedDir = path.join(RENDERED_ROOT, documentId);
+    if (fs.existsSync(docRenderedDir)) {
+      try {
+        fs.rmSync(docRenderedDir, { recursive: true, force: true });
+      } catch (err) {
+        console.warn(`[Storage] Failed to remove rendered directory (${docRenderedDir}): ${err.message}`);
+      }
+    }
+  }
+}
+
+/**
+ * Deletes physical storage files for an entire company (all reports and thumbnails)
+ *
+ * @param {string} dseSymbol
+ * @param {Array<Object>} documents
+ */
+export function deleteCompanyStorageFiles(dseSymbol, documents = []) {
+  if (Array.isArray(documents)) {
+    for (const doc of documents) {
+      deleteDocumentStorageFiles(doc.id, doc.storedFilePath);
+    }
+  }
+
+  if (dseSymbol) {
+    const companyReportsDir = path.join(UPLOADS_ROOT, dseSymbol.toUpperCase());
+    if (fs.existsSync(companyReportsDir)) {
+      try {
+        fs.rmSync(companyReportsDir, { recursive: true, force: true });
+      } catch (err) {
+        console.warn(`[Storage] Failed to remove company reports directory (${companyReportsDir}): ${err.message}`);
+      }
+    }
+  }
+}
+

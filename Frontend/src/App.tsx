@@ -40,6 +40,7 @@ import {
   ZoomOut,
   AlertCircle,
   Hash,
+  Trash2,
 } from 'lucide-react';
 
 interface Company {
@@ -193,6 +194,15 @@ export default function App() {
   const [proofPageNum, setProofPageNum] = useState<number>(1);
   const [proofHighlightFact, setProofHighlightFact] = useState<NormalizedFact | null>(null);
   const [proofZoom, setProofZoom] = useState<number>(1);
+
+  // Deletion modals state
+  const [deleteReportModalOpen, setDeleteReportModalOpen] = useState(false);
+  const [reportToDelete, setReportToDelete] = useState<DocumentItem | null>(null);
+  const [deletingReport, setDeletingReport] = useState(false);
+
+  const [deleteCompanyModalOpen, setDeleteCompanyModalOpen] = useState(false);
+  const [companyToDelete, setCompanyToDelete] = useState<Company | null>(null);
+  const [deletingCompany, setDeletingCompany] = useState(false);
 
   // Notification helper
   const showNotification = (type: 'success' | 'error', message: string) => {
@@ -397,6 +407,76 @@ export default function App() {
     }
   };
 
+  // 6. Delete Report (Document)
+  const handleDeleteReport = async () => {
+    if (!reportToDelete) return;
+    try {
+      setDeletingReport(true);
+      const res = await fetch(`/api/documents/${reportToDelete.id}`, {
+        method: 'DELETE',
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || 'Failed to delete report');
+      }
+      showNotification('success', data.message || 'Report deleted successfully');
+      setDeleteReportModalOpen(false);
+      setReportToDelete(null);
+
+      // Refresh documents and company screening details
+      if (selectedCompany) {
+        await fetchCompanyDocuments(selectedCompany.id);
+        await loadCompanyDetails(selectedCompany);
+      }
+      await fetchCompanies();
+    } catch (err: any) {
+      showNotification('error', err.message || 'Error deleting report');
+    } finally {
+      setDeletingReport(false);
+    }
+  };
+
+  // 7. Delete Company or Purge Company Data
+  const handleDeleteCompany = async (purgeOnly: boolean) => {
+    if (!companyToDelete) return;
+    try {
+      setDeletingCompany(true);
+      const endpoint = purgeOnly
+        ? `/api/companies/${companyToDelete.id}/data`
+        : `/api/companies/${companyToDelete.id}`;
+      const res = await fetch(endpoint, {
+        method: 'DELETE',
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || 'Failed to delete company');
+      }
+      showNotification('success', data.message || 'Action completed successfully');
+      setDeleteCompanyModalOpen(false);
+
+      if (!purgeOnly) {
+        // Full deletion: close drawer if this company was active
+        if (selectedCompany?.id === companyToDelete.id) {
+          setSelectedCompany(null);
+        }
+      } else {
+        // Purged: reset views
+        if (selectedCompany?.id === companyToDelete.id) {
+          setScreeningResult(null);
+          setFacts([]);
+          setDocuments([]);
+          await loadCompanyDetails(companyToDelete);
+        }
+      }
+      setCompanyToDelete(null);
+      await fetchCompanies();
+    } catch (err: any) {
+      showNotification('error', err.message || 'Error processing delete request');
+    } finally {
+      setDeletingCompany(false);
+    }
+  };
+
   const filteredCompanies = companies.filter(
     (c) =>
       c.dseSymbol.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -578,6 +658,19 @@ export default function App() {
                 >
                   DSE Profile <ExternalLink className="h-3 w-3" />
                 </a>
+                <Button
+                  onClick={() => {
+                    setCompanyToDelete(selectedCompany);
+                    setDeleteCompanyModalOpen(true);
+                  }}
+                  size="sm"
+                  variant="outline"
+                  className="border-rose-900/60 hover:border-rose-700 bg-rose-950/20 hover:bg-rose-900/30 text-rose-300 text-xs gap-1.5 transition ml-1"
+                  title="Delete or reset company"
+                >
+                  <Trash2 className="h-3.5 w-3.5 text-rose-400" />
+                  Delete / Purge
+                </Button>
               </div>
             </div>
 
@@ -1082,6 +1175,18 @@ export default function App() {
                             >
                               <Eye className="h-3 w-3" /> View Income Statement (P8)
                             </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                setReportToDelete(doc);
+                                setDeleteReportModalOpen(true);
+                              }}
+                              className="border-rose-900/60 hover:border-rose-700 bg-rose-950/20 hover:bg-rose-900/30 text-rose-300 text-xs h-7 px-2 gap-1 transition"
+                              title="Delete report and extracted facts"
+                            >
+                              <Trash2 className="h-3 w-3 text-rose-400" /> Delete
+                            </Button>
                           </div>
                         </div>
 
@@ -1206,6 +1311,18 @@ export default function App() {
                               title="Upload PDF"
                             >
                               <Upload className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => {
+                                setCompanyToDelete(comp);
+                                setDeleteCompanyModalOpen(true);
+                              }}
+                              className="text-xs text-slate-500 hover:text-rose-400 hover:bg-rose-950/30 h-7 px-2"
+                              title="Delete or purge company"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
                             </Button>
                           </div>
                         </TableCell>
@@ -1517,6 +1634,187 @@ export default function App() {
                 </Button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Report Confirmation Modal */}
+      {deleteReportModalOpen && reportToDelete && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md p-6 space-y-5 shadow-2xl relative">
+            <button
+              onClick={() => {
+                setDeleteReportModalOpen(false);
+                setReportToDelete(null);
+              }}
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-200 p-1"
+            >
+              <X className="h-5 w-5" />
+            </button>
+
+            <div className="flex items-start gap-3.5">
+              <div className="h-10 w-10 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 flex items-center justify-center shrink-0">
+                <Trash2 className="h-5 w-5" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-base font-bold text-slate-100">Delete Financial Report</h3>
+                <p className="text-xs text-slate-400">
+                  Are you sure you want to permanently delete this PDF statement?
+                </p>
+              </div>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-slate-950/60 border border-slate-800/80 space-y-2 text-xs">
+              <div className="flex items-center justify-between text-slate-300">
+                <span className="text-slate-500">Filename:</span>
+                <span className="font-semibold text-slate-200 truncate max-w-[220px]" title={reportToDelete.originalFilename}>
+                  {reportToDelete.originalFilename}
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-slate-300">
+                <span className="text-slate-500">Period / Type:</span>
+                <span>{reportToDelete.reportType} ({reportToDelete.totalPages} Pages)</span>
+              </div>
+              <div className="flex items-center justify-between text-slate-300">
+                <span className="text-slate-500">Upload Date:</span>
+                <span>{new Date(reportToDelete.uploadedAt).toLocaleDateString()}</span>
+              </div>
+            </div>
+
+            <p className="text-[11px] text-amber-300/80 bg-amber-500/10 border border-amber-500/20 p-3 rounded-lg leading-relaxed">
+              ⚠️ <strong>Warning:</strong> This permanently deletes the PDF file from disk, deletes all rendered page proofs, purges all extracted balance sheet and income statement facts, and resets any screenings attached to this filing.
+            </p>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <Button
+                type="button"
+                variant="ghost"
+                disabled={deletingReport}
+                onClick={() => {
+                  setDeleteReportModalOpen(false);
+                  setReportToDelete(null);
+                }}
+                className="text-xs text-slate-400 hover:text-slate-200"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                disabled={deletingReport}
+                onClick={handleDeleteReport}
+                className="bg-rose-600 hover:bg-rose-500 text-white text-xs gap-1.5 font-medium"
+              >
+                {deletingReport && <RefreshCw className="h-3.5 w-3.5 animate-spin" />}
+                {deletingReport ? 'Deleting...' : 'Delete Report Permanently'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete / Purge Company Modal */}
+      {deleteCompanyModalOpen && companyToDelete && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg p-6 space-y-5 shadow-2xl relative">
+            <button
+              onClick={() => {
+                setDeleteCompanyModalOpen(false);
+                setCompanyToDelete(null);
+              }}
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-200 p-1"
+            >
+              <X className="h-5 w-5" />
+            </button>
+
+            <div className="flex items-start gap-3.5">
+              <div className="h-10 w-10 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 flex items-center justify-center shrink-0">
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-base font-bold text-slate-100">
+                  Delete / Reset Company: {companyToDelete.dseSymbol}
+                </h3>
+                <p className="text-xs text-slate-400">
+                  {companyToDelete.name} • {companyToDelete.sector}
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-300">
+              Select an action to clean up this listed company's filings, accounting facts, and screening results:
+            </p>
+
+            <div className="space-y-3">
+              {/* Option A: Purge Data / Reset Company */}
+              <div className="p-4 rounded-xl border border-slate-800 bg-slate-950/70 hover:border-slate-700 transition space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <RefreshCw className="h-4 w-4 text-amber-400" />
+                    <h4 className="text-xs font-semibold text-slate-200">
+                      Option A: Purge All Reports & Audit Data (Reset Company)
+                    </h4>
+                  </div>
+                  <Badge variant="outline" className="border-amber-500/40 text-amber-300 text-[10px]">
+                    Recommended
+                  </Badge>
+                </div>
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  Deletes all uploaded PDF reports, rendered proof thumbnails, extracted facts, screening results, and market data.
+                  The company symbol and profile remain in your universe for future filings.
+                </p>
+                <div className="pt-1">
+                  <Button
+                    size="sm"
+                    disabled={deletingCompany}
+                    onClick={() => handleDeleteCompany(true)}
+                    className="bg-amber-600 hover:bg-amber-500 text-slate-950 font-semibold text-xs gap-1.5 h-8"
+                  >
+                    {deletingCompany && <RefreshCw className="h-3 w-3 animate-spin" />}
+                    Purge All Reports & Screenings
+                  </Button>
+                </div>
+              </div>
+
+              {/* Option B: Delete Entire Company */}
+              <div className="p-4 rounded-xl border border-rose-950/60 bg-rose-950/15 hover:border-rose-900/60 transition space-y-2.5">
+                <div className="flex items-center gap-2">
+                  <Trash2 className="h-4 w-4 text-rose-400" />
+                  <h4 className="text-xs font-semibold text-rose-200">
+                    Option B: Permanently Delete Entire Company
+                  </h4>
+                </div>
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  Completely removes <strong className="text-rose-300">{companyToDelete.dseSymbol}</strong> from your StockScanner universe,
+                  including all database records, financial periods, and disk storage files. This action cannot be reversed.
+                </p>
+                <div className="pt-1">
+                  <Button
+                    size="sm"
+                    disabled={deletingCompany}
+                    onClick={() => handleDeleteCompany(false)}
+                    className="bg-rose-600 hover:bg-rose-500 text-white font-semibold text-xs gap-1.5 h-8"
+                  >
+                    {deletingCompany && <RefreshCw className="h-3 w-3 animate-spin" />}
+                    Delete Company Permanently
+                  </Button>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-2">
+              <Button
+                type="button"
+                variant="ghost"
+                disabled={deletingCompany}
+                onClick={() => {
+                  setDeleteCompanyModalOpen(false);
+                  setCompanyToDelete(null);
+                }}
+                className="text-xs text-slate-400 hover:text-slate-200"
+              >
+                Cancel
+              </Button>
+            </div>
           </div>
         </div>
       )}

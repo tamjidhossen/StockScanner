@@ -1,4 +1,5 @@
 import prisma from '../lib/prisma.js';
+import { deleteDocumentStorageFiles } from '../services/storage.service.js';
 
 export async function getFinancialPeriods(req, res, next) {
   try {
@@ -75,3 +76,47 @@ export async function createFinancialPeriod(req, res, next) {
     next(error);
   }
 }
+
+export async function deleteFinancialPeriod(req, res, next) {
+  try {
+    const { id } = req.params;
+
+    const period = await prisma.financialPeriod.findUnique({
+      where: { id },
+      include: {
+        documents: true,
+        company: true,
+      },
+    });
+
+    if (!period) {
+      return res.status(404).json({
+        success: false,
+        message: `FinancialPeriod with ID "${id}" not found`,
+      });
+    }
+
+    // 1. Delete document files from disk
+    for (const doc of period.documents) {
+      deleteDocumentStorageFiles(doc.id, doc.storedFilePath);
+    }
+
+    // 2. Delete period (Prisma schema cascades facts and screenings)
+    await prisma.financialPeriod.delete({
+      where: { id },
+    });
+
+    res.json({
+      success: true,
+      message: `Financial period "${period.fiscalYear} ${period.periodType}" and all its extracted facts and screening results have been deleted.`,
+      data: {
+        id: period.id,
+        fiscalYear: period.fiscalYear,
+        periodType: period.periodType,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+

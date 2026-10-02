@@ -1,6 +1,6 @@
 import fs from 'fs';
 import prisma from '../lib/prisma.js';
-import { storePdfDocument } from '../services/storage.service.js';
+import { storePdfDocument, deleteDocumentStorageFiles } from '../services/storage.service.js';
 import { inspectAndRenderDocument } from '../services/pdf-inspector.service.js';
 
 export async function uploadDocument(req, res, next) {
@@ -228,3 +228,69 @@ export async function getDocumentPageImage(req, res, next) {
     next(error);
   }
 }
+
+export async function deleteDocument(req, res, next) {
+  try {
+    const { id } = req.params;
+
+    const document = await prisma.document.findUnique({
+      where: { id },
+      include: {
+        company: true,
+        financialPeriod: {
+          include: {
+            documents: true,
+          },
+        },
+      },
+    });
+
+    if (!document) {
+      return res.status(404).json({
+        success: false,
+        message: `Document with ID "${id}" not found`,
+      });
+    }
+
+    // 1. Delete physical files (PDF + rendered page thumbnails)
+    deleteDocumentStorageFiles(document.id, document.storedFilePath);
+
+    const periodId = document.financialPeriodId;
+
+    // 2. Delete document record (Prisma schema cascades: pages, extraction jobs, raw facts, normalized facts)
+    await prisma.document.delete({
+      where: { id },
+    });
+
+    // 3. Clean up associated financial period and its screenings if no other documents exist for it
+    if (periodId) {
+      const remainingPeriod = await prisma.financialPeriod.findUnique({
+        where: { id: periodId },
+        include: {
+          documents: true,
+          facts: true,
+        },
+      });
+
+      if (remainingPeriod && remainingPeriod.documents.length === 0) {
+        // Cascades to screening results, ratio details, and any facts
+        await prisma.financialPeriod.delete({
+          where: { id: periodId },
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `Document "${document.originalFilename}" and all extracted facts and data have been deleted.`,
+      data: {
+        id: document.id,
+        originalFilename: document.originalFilename,
+        companySymbol: document.company?.dseSymbol,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
