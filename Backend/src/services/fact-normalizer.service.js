@@ -47,13 +47,18 @@ export function convertBengaliDigits(str) {
 /**
  * Parses raw printed text into a numeric value in base BDT units
  *
- * @param {string|number} rawValue - As printed, e.g. "(1,234.50)", "১২,৩৪৫", "150.25 mn"
+ * @param {string|number} rawValue - As printed, e.g. "(1,234.50)", "১২,৩৪৫", "150.25 mn", "-", "-."
  * @param {string|number} [unitScale='units'] - e.g. "millions", "thousands", or multiplier
  * @returns {number} Numeric value in base BDT
  */
 export function parseAndScaleNumericValue(rawValue, unitScale = 'units') {
   if (rawValue === null || rawValue === undefined) {
     throw new Error('Cannot parse null or undefined raw value');
+  }
+
+  const rawTrimmed = String(rawValue).trim();
+  if (rawTrimmed === '') {
+    throw new Error('Cannot parse empty or whitespace-only raw value');
   }
 
   if (typeof rawValue === 'number') {
@@ -63,7 +68,7 @@ export function parseAndScaleNumericValue(rawValue, unitScale = 'units') {
     return rawValue * scaleFactor;
   }
 
-  let text = String(rawValue).trim();
+  let text = rawTrimmed;
   text = convertBengaliDigits(text);
 
   // Check if enclosed in parentheses (accounting negative)
@@ -75,11 +80,11 @@ export function parseAndScaleNumericValue(rawValue, unitScale = 'units') {
   // Remove currency words, symbols, and commas
   text = text.replace(/(BDT|Tk|Taka|৳|\$|£|€|,)/gi, '').trim();
 
-  // Handle accounting nil/zero notations: "-", "—", "–", "-.", "nil", "none", "n/a", etc.
+  // Handle accounting nil/zero notations: "-", "—", "–", "-.", "- -", "nil", "none", "n/a", etc.
   const hasDigits = /\d/.test(text);
   if (!hasDigits) {
-    const isNilToken = /^[\s\-—–._]*(nil|none|n\/a|not applicable)?[\s\-—–._]*$/i.test(text);
-    if (isNilToken) {
+    const isNilToken = /^[\s\-—–._]*(nil|none|n\/a|not applicable|—|–|-|\.-|\.-)?[\s\-—–._]*$/i.test(text);
+    if (isNilToken && text.length > 0) {
       return 0;
     }
   }
@@ -115,7 +120,17 @@ export function parseAndScaleNumericValue(rawValue, unitScale = 'units') {
     documentScale = UNIT_SCALE_MULTIPLIERS[cleanScaleKey] || 1;
   }
 
-  const finalMultiplier = inlineScale !== 1 ? inlineScale : documentScale;
+  let finalMultiplier = inlineScale !== 1 ? inlineScale : documentScale;
+
+  // Catastrophic over-scaling safeguard:
+  // If the number is already >= 1 Billion (10^9) with full integer digits,
+  // applying a 'thousands' or 'millions' multiplier would yield tens of trillions (exceeding entire Bangladesh GDP).
+  // Table was already printed in full unscaled Taka units.
+  if (numeric >= 1_000_000_000 && finalMultiplier > 1) {
+    console.warn(`[Scale Safeguard] Detected unscaled large figure (${numeric.toLocaleString()}) with scale multiplier ${finalMultiplier}. Overriding multiplier to 1 to prevent trillion-scale distortion.`);
+    finalMultiplier = 1;
+  }
+
   const baseValue = numeric * finalMultiplier;
 
   return isNegative ? -Math.abs(baseValue) : Math.abs(baseValue);

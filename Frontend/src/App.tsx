@@ -181,6 +181,8 @@ export default function App() {
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [selectedUploadCompanyId, setSelectedUploadCompanyId] = useState('');
   const [reportType, setReportType] = useState('QUARTERLY');
+  const [periodQuarter, setPeriodQuarter] = useState<'Q1' | 'Q2' | 'Q3'>('Q1');
+  const [customFiscalYear, setCustomFiscalYear] = useState('');
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadLoading, setUploadLoading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
@@ -360,6 +362,10 @@ export default function App() {
       formData.append('file', uploadFile);
       formData.append('companyId', selectedUploadCompanyId);
       formData.append('reportType', reportType);
+      formData.append('periodType', reportType === 'QUARTERLY' ? periodQuarter : 'ANNUAL');
+      if (customFiscalYear.trim()) {
+        formData.append('fiscalYear', customFiscalYear.trim());
+      }
 
       const res = await fetch('/api/documents/upload', {
         method: 'POST',
@@ -377,6 +383,8 @@ export default function App() {
         setTimeout(() => {
           setUploadModalOpen(false);
           setUploadFile(null);
+          setCustomFiscalYear('');
+          setPeriodQuarter('Q1');
           setUploadMessage(null);
         }, 1500);
       } else {
@@ -1386,7 +1394,7 @@ export default function App() {
                         : 'bg-slate-950 border-slate-800 text-slate-400 hover:bg-slate-800'
                     }`}
                   >
-                    Quarterly Report (Q1/Q2/Q3)
+                    Quarterly Report
                   </button>
                   <button
                     type="button"
@@ -1400,6 +1408,77 @@ export default function App() {
                     Annual Report (Audited 12M)
                   </button>
                 </div>
+              </div>
+
+              {reportType === 'QUARTERLY' && (
+                <div>
+                  <label className="text-xs text-slate-300 font-medium block mb-1">Quarter Duration</label>
+                  <div className="grid grid-cols-3 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setPeriodQuarter('Q1')}
+                      className={`py-1.5 text-xs font-medium rounded-lg border text-center transition ${
+                        periodQuarter === 'Q1'
+                          ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300'
+                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:bg-slate-800'
+                      }`}
+                    >
+                      Q1 (3 Months)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPeriodQuarter('Q2')}
+                      className={`py-1.5 text-xs font-medium rounded-lg border text-center transition ${
+                        periodQuarter === 'Q2'
+                          ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300'
+                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:bg-slate-800'
+                      }`}
+                    >
+                      Q2 / H1 (6 Months)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPeriodQuarter('Q3')}
+                      className={`py-1.5 text-xs font-medium rounded-lg border text-center transition ${
+                        periodQuarter === 'Q3'
+                          ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300'
+                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:bg-slate-800'
+                      }`}
+                    >
+                      Q3 (9 Months)
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <label className="text-xs text-slate-300 font-medium block mb-1">
+                  Financial Year (Optional Override)
+                </label>
+                <select
+                  value={customFiscalYear}
+                  onChange={(e) => setCustomFiscalYear(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 text-xs text-slate-200 rounded-lg p-2.5 focus:outline-none focus:border-emerald-500 cursor-pointer"
+                >
+                  <option value="">Auto-detect from statement header (Recommended)</option>
+                  <optgroup label="Standard Split Years (July–June / April–March)">
+                    <option value="2026-2027">FY 2026-2027</option>
+                    <option value="2025-2026">FY 2025-2026</option>
+                    <option value="2024-2025">FY 2024-2025</option>
+                    <option value="2023-2024">FY 2023-2024</option>
+                    <option value="2022-2023">FY 2022-2023</option>
+                  </optgroup>
+                  <optgroup label="Calendar Financial Years (January–December)">
+                    <option value="2026">FY 2026</option>
+                    <option value="2025">FY 2025</option>
+                    <option value="2024">FY 2024</option>
+                    <option value="2023">FY 2023</option>
+                    <option value="2022">FY 2022</option>
+                  </optgroup>
+                </select>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Select a fiscal year to override, or keep Auto-detect to let the AI resolve it from the balance sheet date.
+                </p>
               </div>
 
               <div>

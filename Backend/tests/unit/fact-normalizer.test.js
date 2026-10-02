@@ -33,15 +33,29 @@ describe('Fact Normalizer Service', () => {
     it('parses accounting nil and dash notations as zero', () => {
       expect(parseAndScaleNumericValue('-')).toBe(0);
       expect(parseAndScaleNumericValue('-.')).toBe(0);
+      expect(parseAndScaleNumericValue('-.-')).toBe(0);
+      expect(parseAndScaleNumericValue('- -')).toBe(0);
       expect(parseAndScaleNumericValue('—')).toBe(0);
       expect(parseAndScaleNumericValue('–')).toBe(0);
       expect(parseAndScaleNumericValue('nil')).toBe(0);
       expect(parseAndScaleNumericValue('NIL')).toBe(0);
       expect(parseAndScaleNumericValue('None')).toBe(0);
       expect(parseAndScaleNumericValue('N/A')).toBe(0);
+      expect(parseAndScaleNumericValue('not applicable')).toBe(0);
     });
 
-    it('applies unit scaling correctly', () => {
+    it('throws error on empty or whitespace-only inputs (zero fallback prohibited)', () => {
+      expect(() => parseAndScaleNumericValue('')).toThrow('Cannot parse empty or whitespace-only');
+      expect(() => parseAndScaleNumericValue('   ')).toThrow('Cannot parse empty or whitespace-only');
+    });
+
+    it('protects against catastrophic over-scaling when numbers are already in full unscaled units', () => {
+      // 49.89 Billion printed in full Taka with commas should not be multiplied into 49 Trillion
+      expect(parseAndScaleNumericValue('49,891,967,210', 'thousands')).toBe(49_891_967_210);
+      expect(parseAndScaleNumericValue('1,743,186,382', 'millions')).toBe(1_743_186_382);
+    });
+
+    it('applies unit scaling correctly for truncated values', () => {
       // millions
       expect(parseAndScaleNumericValue('10.5', 'millions')).toBe(10_500_000);
       expect(parseAndScaleNumericValue('(2.5)', 'millions')).toBe(-2_500_000);

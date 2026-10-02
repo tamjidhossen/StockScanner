@@ -1,6 +1,7 @@
 import prisma from '../lib/prisma.js';
 import { processPageExtraction } from '../services/extraction.service.js';
 import { runAaoifiScreening } from '../services/screening/screening.service.js';
+import { syncDseMarketData } from '../services/dse-market.service.js';
 
 let isWorkerRunning = false;
 let pollingTimer = null;
@@ -101,13 +102,26 @@ export async function processJob(jobId) {
       `Job ${jobId} completed successfully: extracted ${totalFactsCount} facts across ${pagesProcessed} financial pages.`
     );
 
-    // Automatically trigger AAOIFI Screening if financial period is resolved
+    // Automatically synchronize real-time DSE market quotes & share counts upon extraction completion
     const freshDoc = await prisma.document.findUnique({
       where: { id: document.id },
+      include: { company: true },
     });
+
+    if (freshDoc && freshDoc.company && freshDoc.company.dseSymbol) {
+      try {
+        console.log(`Auto-synchronizing real-time DSE quotes and share counts for ${freshDoc.company.dseSymbol} from dse.com.bd...`);
+        await syncDseMarketData(freshDoc.company.dseSymbol);
+        console.log(`Real-time DSE market data successfully synchronized for ${freshDoc.company.dseSymbol}.`);
+      } catch (syncErr) {
+        console.warn(`DSE real-time auto-synchronization warning for ${freshDoc.company.dseSymbol}: ${syncErr.message}`);
+      }
+    }
+
+    // Automatically trigger deterministic AAOIFI Screening if financial period is resolved
     if (freshDoc && freshDoc.financialPeriodId) {
       try {
-        console.log(`Auto-running AAOIFI screening for company ${freshDoc.companyId} period ${freshDoc.financialPeriodId}...`);
+        console.log(`Auto-running AAOIFI screening for company ${freshDoc.company.dseSymbol} period ${freshDoc.financialPeriodId}...`);
         await runAaoifiScreening({
           companyId: freshDoc.companyId,
           financialPeriodId: freshDoc.financialPeriodId,

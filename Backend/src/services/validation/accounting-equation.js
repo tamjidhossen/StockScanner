@@ -11,9 +11,22 @@ export class AccountingValidationError extends Error {
 
 /**
  * Helper to retrieve a normalized fact value, throwing if absent
+ *
+ * @param {Array<Object>} facts
+ * @param {string} conceptCode
+ * @param {Object} [options]
+ * @param {string} [options.statementType] - Filter by statement type
+ * @param {Array<string>} [options.sourceFactIds] - Array to collect used fact IDs for audit trail
+ * @returns {number}
  */
-export function getRequiredFact(facts, conceptCode) {
-  const matching = facts.filter((f) => f.conceptCode === conceptCode);
+export function getRequiredFact(facts, conceptCode, options = {}) {
+  let matching = facts.filter((f) => f.conceptCode === conceptCode);
+
+  if (options.statementType) {
+    const filtered = matching.filter((f) => f.statementType === options.statementType);
+    if (filtered.length > 0) matching = filtered;
+  }
+
   if (matching.length === 0) {
     throw new AccountingValidationError(
       'MISSING_REQUIRED_FACT',
@@ -23,6 +36,9 @@ export function getRequiredFact(facts, conceptCode) {
   }
 
   if (matching.length === 1) {
+    if (options.sourceFactIds && matching[0].id) {
+      options.sourceFactIds.push(matching[0].id);
+    }
     return matching[0].normalizedValue;
   }
 
@@ -34,23 +50,92 @@ export function getRequiredFact(facts, conceptCode) {
   );
 
   if (explicitTotal) {
+    if (options.sourceFactIds && explicitTotal.id) {
+      options.sourceFactIds.push(explicitTotal.id);
+    }
     return explicitTotal.normalizedValue;
   }
 
   // For total concepts, the true total is the maximum of the components
   if (conceptCode.startsWith('TOTAL_')) {
-    return Math.max(...matching.map((m) => m.normalizedValue));
+    const maxFact = matching.reduce((prev, curr) =>
+      curr.normalizedValue > prev.normalizedValue ? curr : prev
+    );
+    if (options.sourceFactIds && maxFact.id) {
+      options.sourceFactIds.push(maxFact.id);
+    }
+    return maxFact.normalizedValue;
   }
 
-  return matching[0].normalizedValue;
+  // For component line items with multiple occurrences, the true value is their sum
+  for (const f of matching) {
+    if (options.sourceFactIds && f.id) {
+      options.sourceFactIds.push(f.id);
+    }
+  }
+  return matching.reduce((sum, f) => sum + f.normalizedValue, 0);
 }
 
 /**
- * Helper to retrieve a normalized fact value, or return 0 if legitimately absent
+ * Helper to retrieve a normalized fact value, or return 0 if legitimately absent.
+ * If multiple component line items exist without an explicit total, sums them.
+ *
+ * @param {Array<Object>} facts
+ * @param {string} conceptCode
+ * @param {Object} [options]
+ * @param {string} [options.statementType] - Filter by statement type
+ * @param {Array<string>} [options.sourceFactIds] - Array to collect used fact IDs for audit trail
+ * @returns {number}
  */
-export function getOptionalFact(facts, conceptCode) {
-  const fact = facts.find((f) => f.conceptCode === conceptCode);
-  return fact ? fact.normalizedValue : 0;
+export function getOptionalFact(facts, conceptCode, options = {}) {
+  let matching = facts.filter((f) => f.conceptCode === conceptCode);
+
+  if (options.statementType) {
+    const filtered = matching.filter((f) => f.statementType === options.statementType);
+    if (filtered.length > 0) matching = filtered;
+  }
+
+  if (matching.length === 0) return 0;
+
+  if (matching.length === 1) {
+    if (options.sourceFactIds && matching[0].id) {
+      options.sourceFactIds.push(matching[0].id);
+    }
+    return matching[0].normalizedValue;
+  }
+
+  // If explicit total exists
+  const explicitTotal = matching.find(
+    (f) =>
+      (f.rawLabel && /total/i.test(f.rawLabel)) ||
+      (f.mappingReason && /total/i.test(f.mappingReason))
+  );
+
+  if (explicitTotal) {
+    if (options.sourceFactIds && explicitTotal.id) {
+      options.sourceFactIds.push(explicitTotal.id);
+    }
+    return explicitTotal.normalizedValue;
+  }
+
+  // For total concepts
+  if (conceptCode.startsWith('TOTAL_')) {
+    const maxFact = matching.reduce((prev, curr) =>
+      curr.normalizedValue > prev.normalizedValue ? curr : prev
+    );
+    if (options.sourceFactIds && maxFact.id) {
+      options.sourceFactIds.push(maxFact.id);
+    }
+    return maxFact.normalizedValue;
+  }
+
+  // For multiple component facts (e.g. current + non-current lease liabilities), sum them all!
+  for (const f of matching) {
+    if (options.sourceFactIds && f.id) {
+      options.sourceFactIds.push(f.id);
+    }
+  }
+  return matching.reduce((sum, f) => sum + f.normalizedValue, 0);
 }
 
 /**
@@ -64,9 +149,9 @@ export function validateAccountingIntegrity(facts, tolerance = 1.0) {
   const checks = [];
 
   // Check 1: Fundamental Accounting Equation: Assets = Liabilities + Equity
-  const totalAssets = getRequiredFact(facts, CONCEPT_CODES.TOTAL_ASSETS);
-  const totalLiabilities = getRequiredFact(facts, CONCEPT_CODES.TOTAL_LIABILITIES);
-  const totalEquity = getRequiredFact(facts, CONCEPT_CODES.TOTAL_EQUITY);
+  const totalAssets = getRequiredFact(facts, CONCEPT_CODES.TOTAL_ASSETS, { statementType: 'BALANCE_SHEET' });
+  const totalLiabilities = getRequiredFact(facts, CONCEPT_CODES.TOTAL_LIABILITIES, { statementType: 'BALANCE_SHEET' });
+  const totalEquity = getRequiredFact(facts, CONCEPT_CODES.TOTAL_EQUITY, { statementType: 'BALANCE_SHEET' });
 
   const diffEquation = Math.abs(totalAssets - (totalLiabilities + totalEquity));
   const equationPassed = diffEquation <= tolerance;
@@ -90,8 +175,8 @@ export function validateAccountingIntegrity(facts, tolerance = 1.0) {
   }
 
   // Check 2: Current Assets + Non-Current Assets = Total Assets (if both present)
-  const currentAssets = getOptionalFact(facts, CONCEPT_CODES.TOTAL_CURRENT_ASSETS);
-  const nonCurrentAssets = getOptionalFact(facts, CONCEPT_CODES.TOTAL_NON_CURRENT_ASSETS);
+  const currentAssets = getOptionalFact(facts, CONCEPT_CODES.TOTAL_CURRENT_ASSETS, { statementType: 'BALANCE_SHEET' });
+  const nonCurrentAssets = getOptionalFact(facts, CONCEPT_CODES.TOTAL_NON_CURRENT_ASSETS, { statementType: 'BALANCE_SHEET' });
 
   if (currentAssets > 0 && nonCurrentAssets > 0) {
     const diffAssets = Math.abs(totalAssets - (currentAssets + nonCurrentAssets));
@@ -114,8 +199,8 @@ export function validateAccountingIntegrity(facts, tolerance = 1.0) {
   }
 
   // Check 3: Current Liabilities + Non-Current Liabilities = Total Liabilities (if both present)
-  const currentLiabilities = getOptionalFact(facts, CONCEPT_CODES.TOTAL_CURRENT_LIABILITIES);
-  const nonCurrentLiabilities = getOptionalFact(facts, CONCEPT_CODES.TOTAL_NON_CURRENT_LIABILITIES);
+  const currentLiabilities = getOptionalFact(facts, CONCEPT_CODES.TOTAL_CURRENT_LIABILITIES, { statementType: 'BALANCE_SHEET' });
+  const nonCurrentLiabilities = getOptionalFact(facts, CONCEPT_CODES.TOTAL_NON_CURRENT_LIABILITIES, { statementType: 'BALANCE_SHEET' });
 
   if (currentLiabilities > 0 && nonCurrentLiabilities > 0) {
     const diffLiab = Math.abs(totalLiabilities - (currentLiabilities + nonCurrentLiabilities));

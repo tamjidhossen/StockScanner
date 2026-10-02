@@ -103,25 +103,44 @@ describe('Rule 3/4/3: Interest-Taking Deposits (Deposits ÷ Market Cap)', () => 
 });
 
 describe('Rule 3/4/4: Prohibited Income Ratio (Prohibited ÷ Total Income)', () => {
-  it('passes at exactly 5.00%', () => {
+  it('passes at exactly 5.00% when explicit Total Income is provided', () => {
     const facts = makeFacts({
       [CONCEPT_CODES.INTEREST_INCOME]: 50,
-      [CONCEPT_CODES.TOTAL_REVENUE]: 950,
-      [CONCEPT_CODES.OTHER_INCOME]: 50, // Total income = 1000
+      [CONCEPT_CODES.TOTAL_INCOME]: 1000,
     });
     const res = calculateIncomeRatio({ facts });
     expect(res.ratioPercent).toBe(5.0);
     expect(res.passes).toBe(true);
+    expect(res.denominatorValue).toBe(1000);
   });
 
-  it('fails at 5.01%', () => {
+  it('passes at exactly 5.00% when Total Income is computed from components (Revenue + Other + Prohibited)', () => {
+    const facts = makeFacts({
+      [CONCEPT_CODES.INTEREST_INCOME]: 50,
+      [CONCEPT_CODES.TOTAL_REVENUE]: 900,
+      [CONCEPT_CODES.OTHER_INCOME]: 50, // Total income = 900 + 50 + 50 = 1000
+    });
+    const res = calculateIncomeRatio({ facts });
+    expect(res.ratioPercent).toBe(5.0);
+    expect(res.passes).toBe(true);
+    expect(res.denominatorValue).toBe(1000);
+  });
+
+  it('fails at 5.01% (strict upper bound)', () => {
     const facts = makeFacts({
       [CONCEPT_CODES.INTEREST_INCOME]: 50.1,
-      [CONCEPT_CODES.TOTAL_REVENUE]: 1000,
+      [CONCEPT_CODES.TOTAL_INCOME]: 1000,
     });
     const res = calculateIncomeRatio({ facts });
     expect(res.ratioPercent).toBeCloseTo(5.01);
     expect(res.passes).toBe(false);
+  });
+
+  it('throws MISSING_REQUIRED_FACT when both TOTAL_REVENUE and TOTAL_INCOME are missing', () => {
+    const facts = makeFacts({
+      [CONCEPT_CODES.INTEREST_INCOME]: 50,
+    });
+    expect(() => calculateIncomeRatio({ facts })).toThrow('Required accounting concept');
   });
 });
 
@@ -131,6 +150,29 @@ describe('Rule 3/4/6: Purification Calculation', () => {
       [CONCEPT_CODES.INTEREST_INCOME]: 52_165_315, // Marico actual Q1 interest income
     });
     const res = calculatePurification({ facts, totalShares: 31_500_000n });
-    expect(res.purificationPerShare).toBeCloseTo(1.656, 3);
+    expect(res.purificationPerShare).toBeCloseTo(1.65604, 4);
+    expect(res.totalShares).toBe(31_500_000);
+  });
+
+  it('throws MISSING_REQUIRED_FACT when totalShares is zero or null (zero fallback)', () => {
+    const facts = makeFacts({
+      [CONCEPT_CODES.INTEREST_INCOME]: 1000,
+    });
+    expect(() => calculatePurification({ facts, totalShares: 0 })).toThrow('Total shares outstanding must be greater than zero');
+    expect(() => calculatePurification({ facts, totalShares: null })).toThrow('Total shares outstanding must be greater than zero');
+  });
+});
+
+describe('Multi-Fact Component Summation (e.g. Current + Non-Current Lease Liabilities)', () => {
+  it('sums multiple component facts of the same concept code correctly', () => {
+    const facts = [
+      { id: 'f1', conceptCode: CONCEPT_CODES.FINANCE_LEASE_LIABILITIES, normalizedValue: 79_623_499, statementType: 'BALANCE_SHEET' },
+      { id: 'f2', conceptCode: CONCEPT_CODES.FINANCE_LEASE_LIABILITIES, normalizedValue: 54_630_001, statementType: 'BALANCE_SHEET' },
+    ];
+    const res = calculateDebtRatio({ facts, marketCap: 100_000_000_000, viewType: 'CONSERVATIVE' });
+    // Total leases = 79,623,499 + 54,630,001 = 134,253,500 BDT
+    expect(res.numeratorValue).toBe(134_253_500);
+    expect(res.sourceFactIds).toContain('f1');
+    expect(res.sourceFactIds).toContain('f2');
   });
 });

@@ -419,3 +419,23 @@ The end-to-end system was validated against audited financial reports uploaded t
 - Test runner: `vitest`.
 - Total unit tests: **26 passing (100% pass rate)**.
 - Coverage includes Bengali digit conversion, accounting parentheses, nil/dash string normalization, accounting equation zero-tolerance validation, strict and conservative ratio bounds, threshold edge cases (30.000% pass vs 30.001% fail), and missing fact halt conditions.
+
+---
+
+## 13. Regulatory Benchmark: AAOIFI Shari'ah Standard No. (21)
+
+Full verbatim text and legal clauses are preserved in [docs/aaoifi-standard-21.md](file:///home/tamjid/projects/stockscanner/docs/aaoifi-standard-21.md).
+
+### 13.1 Core Excerpts Enforced in StockScanner
+
+- **Rule 3/4/1 (Prohibited Objects)**: The corporation must not declare prohibited activities (interest dealings, pork, alcohol) in its memorandum of association.
+- **Rule 3/4/2 (Debt Ratio $\le 30\%$)**:
+  $$\frac{\text{Total Interest-Bearing Borrowings (Short \& Long Term)}}{\text{Total Market Capitalization}} \le 30.00\%$$
+- **Rule 3/4/3 (Liquid Deposits Ratio $\le 30\%$)**:
+  $$\frac{\text{Total Interest-Taking Deposits}}{\text{Total Market Capitalization}} \le 30.00\%$$
+- **Rule 3/4/4 (Impure Income Component $\le 5\%$)**:
+  $$\frac{\text{Prohibited (Impure / Interest) Revenue}}{\text{Total Corporate Revenue}} \le 5.00\%$$
+- **Rule 3/4/5 (Verified Financial Position)**: All percentages must be calculated from the latest verified or audited financial position.
+- **Rule 3/4/6 (Mandatory Dividend Purification)**: Prohibited earnings must be purified on a per-share basis:
+  $$\text{Purification Per Share} = \frac{\text{Total Prohibited Income}}{\text{Total Outstanding Shares}}$$
+

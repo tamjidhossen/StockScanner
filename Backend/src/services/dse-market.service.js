@@ -86,7 +86,7 @@ export async function fetchCompanyFundamentalsFromDse(symbol) {
   );
 
   const marketCapMillionBDT = parseNumber(cards['Market cap']);
-  const marketCapBaseBDT = marketCapMillionBDT * 1_000_000;
+  const marketCapBaseBDT = Math.round(marketCapMillionBDT * 1_000_000);
   const navPerShare = parseNumber(cards['NAV per share']);
   const peAudited = parseNumber(cards['P/E (audited)']);
   const paidUpCapitalMillionBDT = parseNumber(dtDdPairs['Paid-up capital']);
@@ -135,12 +135,27 @@ export async function syncDseMarketData(symbol) {
 
   const totalShares = fundamentals.totalShares > 0
     ? BigInt(fundamentals.totalShares)
-    : company.totalShares;
+    : (company.totalShares && company.totalShares > 0n ? company.totalShares : null);
 
-  const closingPrice = livePriceData.ltp || livePriceData.close || 0;
-  const marketCap = fundamentals.marketCapBaseBDT > 0
-    ? fundamentals.marketCapBaseBDT
-    : Number(totalShares) * closingPrice;
+  if (!totalShares || totalShares <= 0n) {
+    throw new Error(
+      `MISSING_REQUIRED_FACT: Total outstanding securities for "${cleanSymbol}" could not be retrieved from DSE. Zero fallbacks are prohibited.`
+    );
+  }
+
+  // Fallback order for pricing: ltp -> close -> ycp
+  const closingPrice = Number(livePriceData.ltp) || Number(livePriceData.close) || Number(livePriceData.ycp) || 0;
+
+  // Exact unrounded market cap: Total Shares * Price (or fallback to DSE reported market cap if price unavailable)
+  let marketCap = closingPrice > 0
+    ? Number(totalShares) * closingPrice
+    : (fundamentals.marketCapBaseBDT > 0 ? fundamentals.marketCapBaseBDT : 0);
+
+  if (!marketCap || marketCap <= 0) {
+    throw new Error(
+      `MISSING_MARKET_CAP: Market capitalization for "${cleanSymbol}" cannot be zero or resolved. Zero fallbacks are prohibited.`
+    );
+  }
 
   // 3. Update Company model with latest shares and metrics
   await prisma.company.update({

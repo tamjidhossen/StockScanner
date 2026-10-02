@@ -161,6 +161,10 @@ CRITICAL TABLE EXTRACTION DIRECTIVES:
    - "Share capital" -> SHARE_CAPITAL
    - "Retained earnings" -> RETAINED_EARNINGS
 
+5. TABLE UNIT SCALE DETERMINATION:
+   - Look carefully at the printed numbers: if figures contain 8 or more digits with full comma separation (e.g. "49,891,967,210" or "1,743,186,382"), the unit scale is STRICTLY "units", NEVER "thousands" or "millions".
+   - Only report "thousands" or "millions" if the table header explicitly specifies "Taka in thousands" or "in million BDT" AND the printed numbers are truncated.
+
 Extracted page text tokens (for auxiliary context):
 """
 ${pageText.slice(0, 4000)}

@@ -1,9 +1,10 @@
 import prisma from '../../lib/prisma.js';
-import { validateAccountingIntegrity } from '../validation/accounting-equation.js';
+import { validateAccountingIntegrity, AccountingValidationError } from '../validation/accounting-equation.js';
 import { calculateDebtRatio } from './debt-ratio.service.js';
 import { calculateDepositsRatio } from './deposits-ratio.service.js';
 import { calculateIncomeRatio } from './income-ratio.service.js';
 import { calculatePurification } from './purification.service.js';
+import { syncDseMarketData } from '../dse-market.service.js';
 
 /**
  * Executes complete AAOIFI screening for a given company and financial period
@@ -19,12 +20,12 @@ export async function runAaoifiScreening({
   financialPeriodId,
   customMarketData = null,
 }) {
-  const company = await prisma.company.findUnique({
+  let company = await prisma.company.findUnique({
     where: { id: companyId },
   });
 
   if (!company) {
-    throw new Error(`Company with ID "${companyId}" not found`);
+    throw new AccountingValidationError('MISSING_REQUIRED_FACT', `Company with ID "${companyId}" not found`);
   }
 
   const period = await prisma.financialPeriod.findUnique({
@@ -35,43 +36,77 @@ export async function runAaoifiScreening({
   });
 
   if (!period) {
-    throw new Error(`FinancialPeriod with ID "${financialPeriodId}" not found`);
+    throw new AccountingValidationError('MISSING_REQUIRED_FACT', `FinancialPeriod with ID "${financialPeriodId}" not found`);
   }
 
   const facts = period.facts;
   if (!facts || facts.length === 0) {
-    throw new Error(`No extracted facts found for period "${period.fiscalYear} ${period.periodType}". Please run extraction first.`);
+    throw new AccountingValidationError(
+      'MISSING_REQUIRED_FACT',
+      `No extracted facts found for period "${period.fiscalYear} ${period.periodType}". Please run extraction first.`
+    );
   }
 
-  // 1. Accounting Equation & Subtotal Integrity Validation
+  // 1. Accounting Equation & Subtotal Integrity Validation (Throws ACCOUNTING_EQUATION_MISMATCH on failure)
   const validationResult = validateAccountingIntegrity(facts);
 
-  // 2. Resolve Market Capitalization
+  // 2. Resolve Market Capitalization with Zero-Fallback Discipline
   let periodMarketCap = customMarketData?.periodMarketCap;
   let liveMarketCap = customMarketData?.liveMarketCap;
   let avg12mMarketCap = customMarketData?.avg12mMarketCap;
 
   if (!periodMarketCap || !liveMarketCap) {
-    const marketRecords = await prisma.marketData.findMany({
+    let marketRecords = await prisma.marketData.findMany({
       where: { companyId },
       orderBy: { priceDate: 'desc' },
-      take: 5,
+      take: 10,
     });
 
-    if (marketRecords.length > 0) {
-      if (!liveMarketCap) liveMarketCap = marketRecords[0].marketCap;
-      if (!periodMarketCap) periodMarketCap = marketRecords[marketRecords.length - 1].marketCap;
-      if (!avg12mMarketCap && marketRecords[0].marketCap12mAvg) {
-        avg12mMarketCap = marketRecords[0].marketCap12mAvg;
+    // If no market records exist, automatically attempt to sync from DSE
+    if (marketRecords.length === 0 && company.dseSymbol) {
+      try {
+        console.log(`Auto-syncing real-time DSE market data for ${company.dseSymbol} before screening...`);
+        await syncDseMarketData(company.dseSymbol);
+        marketRecords = await prisma.marketData.findMany({
+          where: { companyId },
+          orderBy: { priceDate: 'desc' },
+          take: 10,
+        });
+        // Re-fetch company in case totalShares updated
+        company = await prisma.company.findUnique({ where: { id: companyId } });
+      } catch (syncErr) {
+        console.warn(`DSE auto-sync during screening attempt failed: ${syncErr.message}`);
       }
-    } else if (company.totalShares && company.paidUpCapMn) {
-      // Fallback base calculation if market data not yet recorded
-      const baseEstimate = Number(company.totalShares) * (company.faceValue || 10.0);
-      if (!liveMarketCap) liveMarketCap = baseEstimate;
-      if (!periodMarketCap) periodMarketCap = baseEstimate;
-    } else {
-      throw new Error(
-        `Market capitalization is required to screen company ${company.dseSymbol}. Please sync DSE market data first.`
+    }
+
+    if (marketRecords.length > 0) {
+      if (!liveMarketCap) {
+        liveMarketCap = marketRecords[0].marketCap;
+      }
+
+      if (!periodMarketCap) {
+        // Find market data record on or closest before periodEnd
+        const periodEndTs = new Date(period.periodEnd).getTime();
+        const pastRecords = marketRecords.filter((m) => new Date(m.priceDate).getTime() <= periodEndTs);
+        if (pastRecords.length > 0) {
+          periodMarketCap = pastRecords[0].marketCap;
+        } else {
+          // If filing date is newer than all records or no historical record exists, use oldest available verified record
+          periodMarketCap = marketRecords[marketRecords.length - 1].marketCap;
+        }
+      }
+
+      if (!avg12mMarketCap) {
+        avg12mMarketCap = marketRecords[0].marketCap12mAvg || liveMarketCap;
+      }
+    }
+
+    // Zero-fallback rule: NEVER estimate from nominal face value or paid-up capital
+    if (!periodMarketCap || periodMarketCap <= 0 || !liveMarketCap || liveMarketCap <= 0) {
+      throw new AccountingValidationError(
+        'MISSING_MARKET_CAP',
+        `MISSING_MARKET_CAP: Market capitalization is required to screen company ${company.dseSymbol}. Zero fallbacks are prohibited. Denominators will never be estimated from nominal face value. Please sync DSE market data.`,
+        { company: company.dseSymbol, periodMarketCap, liveMarketCap }
       );
     }
   }
@@ -91,11 +126,34 @@ export async function runAaoifiScreening({
   // 5. Compute Rule 3/4/4 (Prohibited Income Ratio)
   const incomeResult = calculateIncomeRatio({ facts });
 
-  // 6. Compute Rule 3/4/6 (Purification per share)
-  const totalShares = company.totalShares || 1n;
-  const purificationResult = calculatePurification({ facts, totalShares });
+  // 6. Compute Rule 3/4/6 (Purification per share) — Zero fallback on share count
+  if (!company.totalShares || company.totalShares <= 0n) {
+    // Attempt auto-sync of totalShares from DSE
+    try {
+      await syncDseMarketData(company.dseSymbol);
+      company = await prisma.company.findUnique({ where: { id: companyId } });
+    } catch (_) {}
+  }
 
-  // 7. Overall compliance determination (Strict AAOIFI view as primary)
+  if (!company.totalShares || company.totalShares <= 0n) {
+    throw new AccountingValidationError(
+      'MISSING_REQUIRED_FACT',
+      `Total outstanding shares for company ${company.dseSymbol} is missing or zero. AAOIFI Rule 3/4/6 purification calculation requires verified share count. Zero fallbacks are prohibited.`,
+      { company: company.dseSymbol }
+    );
+  }
+
+  const purificationResult = calculatePurification({ facts, totalShares: company.totalShares });
+
+  // Annualized TTM purification for quarterly filings
+  let purificationTtmPerShare = null;
+  if (period.periodMonths && period.periodMonths < 12 && period.periodMonths > 0) {
+    purificationTtmPerShare = purificationResult.purificationPerShare * (12 / period.periodMonths);
+  } else {
+    purificationTtmPerShare = purificationResult.purificationPerShare;
+  }
+
+  // 7. Overall compliance determination (Strict AAOIFI view as primary benchmark)
   const isCompliant =
     debtStrictPeriod.passes &&
     depStrictPeriod.passes &&
@@ -110,7 +168,7 @@ export async function runAaoifiScreening({
       financialPeriodId,
       overallStatus,
       purificationPerShare: purificationResult.purificationPerShare,
-      purificationTtmPerShare: null,
+      purificationTtmPerShare,
       methodologyNotes: JSON.stringify({
         rule_3_4_2_strict_passes: debtStrictPeriod.passes,
         rule_3_4_2_conservative_passes: debtConsPeriod.passes,
@@ -118,11 +176,14 @@ export async function runAaoifiScreening({
         rule_3_4_3_conservative_passes: depConsPeriod.passes,
         rule_3_4_4_passes: incomeResult.passes,
         accounting_validation: validationResult.allPassed,
+        period_market_cap: periodMarketCap,
+        live_market_cap: liveMarketCap,
+        total_shares: company.totalShares.toString(),
       }),
     },
   });
 
-  // 9. Persist ScreeningRatioDetail rows
+  // 9. Persist ScreeningRatioDetail rows with full source fact IDs provenance
   const ratioDetailsToCreate = [
     {
       screeningResultId: screeningResult.id,
@@ -137,7 +198,7 @@ export async function runAaoifiScreening({
       ratioPercent: debtStrictPeriod.ratioPercent,
       threshold: debtStrictPeriod.threshold,
       passes: debtStrictPeriod.passes,
-      sourceFactIds: JSON.stringify([]),
+      sourceFactIds: JSON.stringify(debtStrictPeriod.sourceFactIds || []),
     },
     {
       screeningResultId: screeningResult.id,
@@ -152,7 +213,7 @@ export async function runAaoifiScreening({
       ratioPercent: debtConsPeriod.ratioPercent,
       threshold: debtConsPeriod.threshold,
       passes: debtConsPeriod.passes,
-      sourceFactIds: JSON.stringify([]),
+      sourceFactIds: JSON.stringify(debtConsPeriod.sourceFactIds || []),
     },
     {
       screeningResultId: screeningResult.id,
@@ -167,7 +228,7 @@ export async function runAaoifiScreening({
       ratioPercent: depStrictPeriod.ratioPercent,
       threshold: depStrictPeriod.threshold,
       passes: depStrictPeriod.passes,
-      sourceFactIds: JSON.stringify([]),
+      sourceFactIds: JSON.stringify(depStrictPeriod.sourceFactIds || []),
     },
     {
       screeningResultId: screeningResult.id,
@@ -182,7 +243,7 @@ export async function runAaoifiScreening({
       ratioPercent: depConsPeriod.ratioPercent,
       threshold: depConsPeriod.threshold,
       passes: depConsPeriod.passes,
-      sourceFactIds: JSON.stringify([]),
+      sourceFactIds: JSON.stringify(depConsPeriod.sourceFactIds || []),
     },
     {
       screeningResultId: screeningResult.id,
@@ -197,7 +258,7 @@ export async function runAaoifiScreening({
       ratioPercent: incomeResult.ratioPercent,
       threshold: incomeResult.threshold,
       passes: incomeResult.passes,
-      sourceFactIds: JSON.stringify([]),
+      sourceFactIds: JSON.stringify(incomeResult.sourceFactIds || []),
     },
   ];
 
@@ -221,7 +282,10 @@ export async function runAaoifiScreening({
       liveStrict: depStrictLive,
     },
     income: incomeResult,
-    purification: purificationResult,
+    purification: {
+      ...purificationResult,
+      purificationTtmPerShare,
+    },
     validation: validationResult,
   };
 }
